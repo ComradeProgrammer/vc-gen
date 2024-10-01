@@ -29,7 +29,7 @@ data Constraints a = Constraints
   deriving (Show, Eq, Ord)
 
 instance Semigroup (Constraints a) where
-  Constraints i r e m <> Constraints i' r' e' m' 
+  Constraints i r e m <> Constraints i' r' e' m'
     = Constraints (i <> i') (r <> r') (e <> e') (m <> m')
 
 instance Monoid (Constraints a) where
@@ -48,7 +48,7 @@ function :: JS.Statement a -> Maybe (Function String)
 function (JS.FunctionStmt _ (JS.Id _ name) args body) = do
   (body', constraints) <- flip runStateT mempty $ mapM statement body
   let args' = (\(JS.Id _ v) -> v) <$> args
-  return $ Function 
+  return $ Function
     { fname = name
     , fargs = args'
     , fbody = seq body'
@@ -86,7 +86,75 @@ function _ = empty
 --   can later be retrieved by the call to `scopeInv`.
 -- - `empty` for remaining patterns.
 statement :: MonadNano String m => JS.Statement a -> m (Statement String)
+-- return
+statement (ReturnStmt e)= Return <$> expr e
+-- assign  - x := f(e0, .., eN)
+statement (AssignStmt var (Call name arguments))= do 
+    args<-(mapM expr arguments)
+    return (AppAsn var name args)
+-- assign  - x := expr
+statement (AssignStmt var e)= do
+  r <-expr e
+  return (Assign var r)
+-- assign  - arr[i] := expr
+statement (ArrAsnStmt array index rhs)=do
+  index2<-expr index
+  rhs2<- expr rhs
+  return (ArrAsn array index2 rhs2)
+--Variable declaration
+statement (DeclStmt statements)= do
+  ss<-(mapM declHelper statements)
+  return (Seq ss)
+-- block
+statement (BlockStmt body)=do
+  ss<-(mapM statement body)
+  return (Seq ss)
+-- if 
+statement (IfSingleStmt conditional body)=do
+  conditional1<-logic conditional
+  body1<-statement body
+  return (If conditional1 body1 (Seq []))
+statement (IfStmt conditional body bodyelse)=do
+  conditional1<-logic conditional
+  body1<-statement body
+  body2<-statement bodyelse
+  return (If conditional1 body1 body2)
+statement(WhileStmt conditional body)=do
+  conditional1<-logic conditional
+
+  (b,invar)<-scopeInv (statement body)
+  return (While invar conditional1 b) 
+statement (CallStmt  "modifies" ((Variable x):_))=do
+  addModifies x
+  return skip
+statement (CallStmt name arguments)=case name of 
+  "assume"->do
+    l<- logic (arguments!!0)
+    return (Assume l)
+  "assert"->do
+    l<- logic (arguments!!0)
+    return (Assert l)
+  "requires"->do
+    l<- logic (arguments!!0)
+    addRequire l
+    return skip 
+  "ensures"->do
+    l<- logic (arguments!!0)
+    addEnsure l
+    return skip 
+  "invariant"->do
+    l<- logic  (arguments!!0)
+    addInvariant l
+    return skip 
+  _->empty
+statement EmptyStmt =return( Seq [])
+ 
 statement _ = empty
+
+declHelper :: MonadNano String m => JS.VarDecl a-> m (Statement String)
+declHelper (Decl var e) = do
+  r <-expr e
+  return (Assign var r)
 
 -- | Helper function to scope invariant fetching to a block.
 --
@@ -131,7 +199,32 @@ addModifies x = modify (mempty { modifies = [x] } <>)
 --
 -- Again, use the patterns below!
 logic :: (Monad m, Alternative m) => JS.Expression a -> m (Logic String)
-logic _ = empty
+logic e = case e of
+  
+  Bool b->if b then return true else return false
+  Negate n-> do
+    v<- logic n
+    return $ neg v
+  InfixExpr l op r-> do
+    case op of
+      JS.OpLAnd-> do
+        v1<-logic l
+        v2<-logic r
+        return $ and [v1,v2]
+      JS.OpLOr-> do
+        v1<-logic l
+        v2<-logic r
+        return $ or [v1,v2]
+      _-> predicate e
+  Call name ((Variable a0):a1:_) ->do
+    p<-logic a1
+    case name of
+      "forall"->return (Forall a0 p)
+      "exists"->return $ exists a0 p
+      _->empty
+  x->predicate x
+
+
 
 -- | Converts JS into Nano expressions of type Bool
 --
@@ -146,7 +239,23 @@ logic _ = empty
 --
 -- Remember to use the patterns we defined below!
 predicate :: (Monad m, Alternative m) => JS.Expression a -> m (Logic String)
-predicate _ = empty
+predicate p = case p of
+  InfixExpr l op r-> do
+    v1<- expr l
+    v2<- expr r
+    case op of
+      JS.OpEq -> return (Pred (v1 :==: v2))
+      JS.OpNEq -> return (Neg (Pred (v1 :==: v2)))
+      JS.OpGEq -> return (Pred (v1 :>=: v2))
+      JS.OpLT -> return (Neg (Pred (v1 :>=: v2)))
+      JS.OpGT -> return (Neg (Pred (v2 :>=: v1)))
+      JS.OpLEq -> return (Pred (v2 :>=: v1))
+      _-> empty
+
+  _->empty
+
+
+
 
 -- | Converts JS into Nano expressions of type Int.
 --
@@ -177,6 +286,24 @@ predicate _ = empty
 expr :: (Monad m, Alternative m) => JS.Expression a -> m (Expr String)
 expr = \case
   Variable name -> return $ Var (name :@ 0)
+  Int i -> return $ Const (toInteger i)
+  ArrayIndex array index -> do
+    v1<- expr array
+    v2<- expr index
+    return $ Select v1 v2
+  Minus e -> do
+    v1<- expr e
+    return ( BinOp Sub (Const 0) v1 )
+  InfixExpr lhs op rhs -> do
+    l <- expr lhs
+    r <- expr rhs
+    case op of
+      JS.OpAdd -> return (BinOp Add l r)
+      JS.OpSub -> return (BinOp Sub l r)
+      JS.OpMul -> return (BinOp Mul l r)
+      JS.OpDiv -> return (BinOp Div l r)
+      JS.OpMod -> return (BinOp Mod l r)
+      _-> empty
   _ -> empty
 
 pattern Variable :: String -> JS.Expression a

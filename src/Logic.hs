@@ -71,6 +71,15 @@ iff :: Logic a -> Logic a -> Logic a
 iff lhs rhs = and [implies lhs rhs, implies rhs lhs]
 
 instance Subable Logic where
-  shift = undefined
+  shift de (Pred x) = Pred (shift de x)
+  shift de (Neg x) = Neg (shift de x)
+  shift de (And xs) = And (map (shift de) xs)
+  shift (n :@ v) (Forall x y) = if n == x then Forall x (shift (n :@ (v + 1)) y) else Forall x (shift (n :@ v) y)
 
-  subst' = undefined
+  subst' de subTo (Pred x) = Pred (subst' de subTo x)
+  subst' de subTo (Neg x) = Neg (subst' de subTo x)
+  subst' de subTo (And xs) = And (map (subst' de subTo) xs)
+  subst' (n :@ v) subTo (Forall x y)= 
+    let shifted=shift (n :@ v) subTo
+    in  if n==x then Forall x (subst' (n:@(v+1)) shifted y) else Forall x (subst' (n:@v) subTo y)
+

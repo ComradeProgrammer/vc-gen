@@ -40,7 +40,7 @@ class Subable s where
   --
   -- For any variable declaration, we would need to shift our substituent and if
   -- required (i.e. the declaration is equivalent to x) also increment index i.
-  subst' :: Eq a => DeBruijn a -> Expr a -> s a -> s a
+  subst' :: Eq a  => DeBruijn a -> Expr a -> s a -> s a
 
   -- | Top level substitution
   --
@@ -130,10 +130,20 @@ data Expr a
 instance Subable Expr where
   -- Check out the Subable typeclass for an explanation of what to implement
   -- here.
-  shift = undefined
+  shift (n1 :@ v1) (Var (n2 :@ v2)) = if n1 == n2 && v2 >= v1
+    then Var (n2 :@ (v2+1))
+    else Var (n2 :@ v2)
 
-  subst' = undefined
-
+  shift de (Expr.BinOp op x y)= BinOp  op (shift de x) (shift de y)
+  shift de (Select  x y)= Select (shift de x) (shift de y)
+  shift de (Store  x y z)= Store (shift de x) (shift de y) (shift de z)
+  shift _ x = x
+  -- debruijn subTo subFrom -> result 
+  subst'  (n1 :@ v1) subTo (Var (n2 :@ v2)) = if n1==n2 && v1==v2 then subTo else Var (n2 :@ v2)
+  subst'  de subTo (Expr.BinOp op x y) = BinOp  op (subst' de subTo x) (subst' de subTo y)
+  subst'  de subTo (Select  x y) =Select (subst' de subTo x) (subst' de subTo y)
+  subst'  de subTo (Store  x y z) =Store (subst' de subTo x) (subst' de subTo y) (subst' de subTo z)
+  subst' _  _ x = x
 -- | Predicates are of type boolean
 data Pred a
   = !(Expr a) :==: !(Expr a)

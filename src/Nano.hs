@@ -1,3 +1,4 @@
+{-# LANGUAGE InstanceSigs #-}
 module Nano
   ( Nano
   , Function (..)
@@ -17,11 +18,12 @@ import Data.Foldable (foldrM)
 
 import Control.Monad.State
 import Control.Monad.Reader
-import Control.Monad.Writer
+import Control.Monad.Writer ( runWriter, MonadWriter,tell )
 
 import qualified SMT
 import Expr
 import Logic
+import Debug.Trace (traceShow)
 
 -- | A full Nano program.
 type Nano a = [Function a]
@@ -193,10 +195,64 @@ instance VCGen Statement where
   -- Make sure to include the `modifies` contract, which should "erase" any
   -- predicates on the respective arrays. You may find the `havoc` function
   -- useful for this.
+
   vcgen stmt post = case stmt of
+    Seq [] -> return post
+    Seq (x:xs) -> do
+      post0<-vcgen (Seq xs) post
+      vcgen x post0
     Assert phi -> return $ and [phi, post]
+    Assume phi -> return $ implies phi post
+    Assign var e -> return (subst var e post)
+    ArrAsn var index e -> return (subst var (Store (Var (var:@0)) index e) post) -- ?
+    If b s1 s2->do
+      wp1<- vcgen s1 post
+      wp2<- vcgen s2 post
+      return $ and [implies b wp1, implies (neg b) wp2]
+    While invar cond body ->do
+      v<-vc stmt post
+      tell v
+      return invar
+    Return e -> do
+      c<-currentFunc
+      -- this is different from what was tolded in the comment
+      vcgen (seq  [Assign result e, Assert (fpost c)]) post
+
+    AppAsn var f alist->do
+      c<-lookupFunc f
+      let plist=fargs c
+      let pre1=fpre c
+      -- x1: arguments(xing can), x2: params (shi can)
+      let pre2 = foldl (\acc (x1,x2)->subst x1 x2 acc) pre1 (zip plist alist)
+
+      freshv <- fresh False
+      let post1=fpost c
+      let post2=foldl (\acc (x1,x2)->subst x1 x2 acc) post1 (zip plist alist)
+      let post3=subst result (Var freshv) post2
+
+      havocmodifies<- mapM havoc (result:(fmods c))
+      vcgen (seq (havocmodifies++[Assert pre2, Assume post3, Assign var (Var freshv)])) post
     _ -> undefined
 
+
+
+
+  -- | If !(Logic a) !(Statement a) !(Statement a)
+  -- -- ^ If conditional body0 body1
+  -- | While !(Logic a) !(Logic a) !(Statement a)
+cleanFuncBody x pack= x
+
+
+
+vc ::MonadVCGen String m =>Statement String -> Logic String -> m(Logic String)
+vc  (While invar cond body) post = do
+  w<-vcgen body invar
+  v<- vc body invar
+  let part1= implies (and [invar,cond]) w
+  let part3= implies (and [invar, neg cond]) post
+  return (and [part1, v,part3])
+
+vc _ _ = return true
 instance VCGen Function where
   vcgen func post' = do
     let pre = Assume $ fpre func
