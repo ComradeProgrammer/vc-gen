@@ -210,9 +210,13 @@ instance VCGen Statement where
       wp2<- vcgen s2 post
       return $ and [implies b wp1, implies (neg b) wp2]
     While invar cond body ->do
-      v<-vc stmt post
-      tell v
-      return invar
+      pre <- vcgen body invar
+      let loop = implies (and [invar,cond]) pre
+      let exit = implies (and [invar, neg cond]) post
+      tell $ and [loop, exit]
+      -- v<-vc stmt post
+      -- tell v
+      return (invar)
     Return e -> do
       c<-currentFunc
       -- this is different from what was tolded in the comment

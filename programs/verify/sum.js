@@ -3,6 +3,10 @@ function sum(n) {
     var r = 0;
     var i = n;
     while (i >= 1) {
+        invariant (i+r==n );
+        invariant (i>=0);
+        invariant (n>=1);
+
         r = r + 1;
         i = i - 1;
     }
